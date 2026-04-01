@@ -28,6 +28,8 @@
 #define MAX_EXCLUDE 128                  ///< Max executable basenames per ExcludeSwitch / ExcludeConvert.
 #define SENDMSG_TIMEOUT_MS 200           ///< Timeout for SendMessageTimeout layout requests (ms).
 #define CLIPBOARD_MAX_WCHARS (1024 * 1024) ///< Max WCHAR count for clipboard backup/convert (~2 MiB).
+#define CLIPBOARD_POST_COPY_DELAY_MS 40  ///< After synthetic Ctrl+C, wait for CF_UNICODETEXT.
+#define CLIPBOARD_POST_PASTE_DELAY_MS 30 ///< After paste, before restoring prior clipboard.
 
 /**
  * @name Global configuration (set by LoadSettings)
@@ -199,14 +201,15 @@ static BOOL IsForegroundExcluded(BOOL forSwitch)
 
 /**
  * @brief Reads switchy.ini next to the executable and fills globals and char maps.
+ * @return FALSE if both layouts could not be resolved (caller must not install the hook).
  */
-void LoadSettings(void)
+BOOL LoadSettings(void)
 {
   WCHAR exePath[MAX_PATH];
   if (GetModuleFileNameW(NULL, exePath, MAX_PATH) == 0)
   {
     ShowErrorW(L"Failed to get executable path.");
-    return;
+    return FALSE;
   }
 
   // Strip exe name so iniPath is the directory (shortcuts still resolve to real exe dir)
@@ -216,7 +219,7 @@ void LoadSettings(void)
   if (wcslen(exePath) + 14 >= MAX_PATH)
   {
     ShowErrorW(L"Executable path too long.");
-    return;
+    return FALSE;
   }
   wcscpy(iniPath, exePath);
   wcscat(iniPath, L"\\switchy.ini");
@@ -270,10 +273,14 @@ void LoadSettings(void)
     free(sysLayouts);
 
   if (!hLayout1 || !hLayout2)
+  {
     ShowErrorW(L"Could not determine layouts. Check switchy.ini or system settings.");
+    return FALSE;
+  }
 
   Switchy_BuildCharMaps(hLayout1, hLayout2);
   LOG(L"Config: L1=%p L2=%p Hotkey=%u SmartCaps=%d\n", hLayout1, hLayout2, hotkeyVkCode, smartCaps);
+  return TRUE;
 }
 
 /**
@@ -295,6 +302,50 @@ typedef enum {
   BackupCb_OpenFailed ///< OpenClipboard failed.
 } BackupCbResult;
 
+typedef enum {
+  ClipCopy_OK,
+  ClipCopy_TooLarge,
+  ClipCopy_AllocFail
+} ClipCopyResult;
+
+/**
+ * @brief Copies bounded UTF-16 from a CF_UNICODETEXT global (caller holds clipboard open).
+ */
+static ClipCopyResult CopyBoundedUnicodeFromHGlobal(HANDLE hMem, WCHAR **out, size_t *outLen)
+{
+  *out = NULL;
+  *outLen = 0;
+  SIZE_T gsz = GlobalSize(hMem);
+  if (gsz == 0 || gsz > (CLIPBOARD_MAX_WCHARS + 1) * sizeof(WCHAR))
+    return ClipCopy_TooLarge;
+
+  WCHAR *p = GlobalLock(hMem);
+  if (!p)
+    return ClipCopy_AllocFail;
+
+  size_t maxWchars = gsz / sizeof(WCHAR);
+  size_t n = 0;
+  while (n < maxWchars && n < CLIPBOARD_MAX_WCHARS && p[n])
+    n++;
+  if (n == CLIPBOARD_MAX_WCHARS && p[n] != 0)
+  {
+    GlobalUnlock(hMem);
+    return ClipCopy_TooLarge;
+  }
+
+  WCHAR *buf = malloc((n + 1) * sizeof(WCHAR));
+  if (!buf)
+  {
+    GlobalUnlock(hMem);
+    return ClipCopy_AllocFail;
+  }
+  memcpy(buf, p, (n + 1) * sizeof(WCHAR));
+  GlobalUnlock(hMem);
+  *out = buf;
+  *outLen = n;
+  return ClipCopy_OK;
+}
+
 /**
  * @brief Copies current CF_UNICODETEXT into @c clipboardBackup (bounded).
  */
@@ -311,44 +362,14 @@ static BackupCbResult BackupUnicodeClipboard(void)
     return BackupCb_NoText;
   }
 
-  SIZE_T gsz = GlobalSize(h);
-  if (gsz == 0 || gsz > (CLIPBOARD_MAX_WCHARS + 1) * sizeof(WCHAR))
-  {
-    CloseClipboard();
-    return BackupCb_TooLarge;
-  }
-
-  WCHAR *p = GlobalLock(h);
-  if (!p)
-  {
-    CloseClipboard();
-    return BackupCb_NoText;
-  }
-
-  // Bounded scan: clipboard memory might not be NUL-terminated; cap by GlobalSize and CLIPBOARD_MAX_WCHARS
-  size_t maxWchars = gsz / sizeof(WCHAR);
-  size_t n = 0;
-  while (n < maxWchars && n < CLIPBOARD_MAX_WCHARS && p[n])
-    n++;
-
-  // If we hit the cap and the string continues, treat as too large (pathological)
-  if (n == CLIPBOARD_MAX_WCHARS && p[n] != 0)
-  {
-    GlobalUnlock(h);
-    CloseClipboard();
-    return BackupCb_TooLarge;
-  }
-
-  clipboardBackup = malloc((n + 1) * sizeof(WCHAR));
-  if (!clipboardBackup)
-  {
-    GlobalUnlock(h);
-    CloseClipboard();
-    return BackupCb_OpenFailed;
-  }
-  memcpy(clipboardBackup, p, (n + 1) * sizeof(WCHAR));
-  GlobalUnlock(h);
+  size_t n;
+  ClipCopyResult cr = CopyBoundedUnicodeFromHGlobal(h, &clipboardBackup, &n);
   CloseClipboard();
+
+  if (cr == ClipCopy_TooLarge)
+    return BackupCb_TooLarge;
+  if (cr == ClipCopy_AllocFail)
+    return BackupCb_OpenFailed;
   return BackupCb_OK;
 }
 
@@ -434,43 +455,15 @@ static BOOL ReadClipboardUnicodeLimited(WCHAR **out, size_t *outLen)
     return FALSE;
   }
 
-  SIZE_T gsz = GlobalSize(h);
-  if (gsz == 0 || gsz > (CLIPBOARD_MAX_WCHARS + 1) * sizeof(WCHAR))
-  {
-    CloseClipboard();
-    return FALSE;
-  }
-
-  WCHAR *p = GlobalLock(h);
-  if (!p)
-  {
-    CloseClipboard();
-    return FALSE;
-  }
-
-  // Same bounded length logic as BackupUnicodeClipboard
-  size_t maxWchars = gsz / sizeof(WCHAR);
-  size_t n = 0;
-  while (n < maxWchars && n < CLIPBOARD_MAX_WCHARS && p[n])
-    n++;
-  if (n == CLIPBOARD_MAX_WCHARS && p[n] != 0)
-  {
-    GlobalUnlock(h);
-    CloseClipboard();
-    return FALSE;
-  }
-
-  *out = malloc((n + 1) * sizeof(WCHAR));
-  if (!*out)
-  {
-    GlobalUnlock(h);
-    CloseClipboard();
-    return FALSE;
-  }
-  memcpy(*out, p, (n + 1) * sizeof(WCHAR));
-  *outLen = n;
-  GlobalUnlock(h);
+  ClipCopyResult cr = CopyBoundedUnicodeFromHGlobal(h, out, outLen);
   CloseClipboard();
+  if (cr != ClipCopy_OK)
+  {
+    free(*out);
+    *out = NULL;
+    *outLen = 0;
+    return FALSE;
+  }
   return TRUE;
 }
 
@@ -487,9 +480,9 @@ static void PressKey(WORD keyCode)
 }
 
 /**
-  * @brief Sends one key-up via SendInput.
+ * @brief Sends one key-up via SendInput.
  * @param keyCode Virtual key code.
-  */
+ */
 static void ReleaseKey(WORD keyCode)
 {
   INPUT input = { 0 };
@@ -659,6 +652,26 @@ static BOOL ClipboardUnchangedAfterCopy(const WCHAR *after, size_t afterLen)
 }
 
 /**
+ * @brief Frees optional text, restores clipboard, optionally switches layout (aborted conversion paths).
+ */
+static void AbortTryConvert(WCHAR *optionalText, BOOL switchLayoutOnEmpty)
+{
+  free(optionalText);
+  RestoreUnicodeClipboard();
+  if (switchLayoutOnEmpty)
+    SwitchToSpecificLayout();
+}
+
+/**
+ * @brief Queues TryConvertSelection on this thread (never call SendInput from inside hook).
+ */
+static void PostDeferConvert(ConvertInputKind kind, BOOL switchOnEmpty)
+{
+  if (!PostThreadMessageW(GetCurrentThreadId(), WM_SWITCHY_DEFER, (WPARAM)kind, (LPARAM)switchOnEmpty))
+    LOG(L"PostThreadMessage WM_SWITCHY_DEFER failed\n");
+}
+
+/**
  * @brief Copy → convert → paste pipeline, then switch to the target layout.
  * @param kind ConvertInput_CtrlHeld: user holds Ctrl, only C/V are injected.
  *             ConvertInput_SyntheticCtrl: full Ctrl+C / Ctrl+V (plain SmartCaps).
@@ -720,37 +733,27 @@ static void TryConvertSelection(ConvertInputKind kind, BOOL switchLayoutOnEmpty)
   else
     SendSyntheticCtrlChord('C');
 
-  // Give the target app time to populate CF_UNICODETEXT
-  Sleep(40);
+  Sleep(CLIPBOARD_POST_COPY_DELAY_MS);
 
   WCHAR *text = NULL;
   size_t textLen = 0;
   if (!ReadClipboardUnicodeLimited(&text, &textLen))
   {
-    free(text);
-    RestoreUnicodeClipboard();
-    if (switchLayoutOnEmpty)
-      SwitchToSpecificLayout();
+    AbortTryConvert(text, switchLayoutOnEmpty);
     return;
   }
 
   // Empty or identical to pre-copy snapshot ⇒ treat as “no selection”; do not paste
   if (textLen == 0 || ClipboardUnchangedAfterCopy(text, textLen))
   {
-    free(text);
-    RestoreUnicodeClipboard();
-    if (switchLayoutOnEmpty)
-      SwitchToSpecificLayout();
+    AbortTryConvert(text, switchLayoutOnEmpty);
     return;
   }
 
   WCHAR *out = malloc((textLen + 2) * sizeof(WCHAR));
   if (!out)
   {
-    free(text);
-    RestoreUnicodeClipboard();
-    if (switchLayoutOnEmpty)
-      SwitchToSpecificLayout();
+    AbortTryConvert(text, switchLayoutOnEmpty);
     return;
   }
 
@@ -760,9 +763,7 @@ static void TryConvertSelection(ConvertInputKind kind, BOOL switchLayoutOnEmpty)
   if (!SetClipboardUnicodeText(out))
   {
     free(out);
-    RestoreUnicodeClipboard();
-    if (switchLayoutOnEmpty)
-      SwitchToSpecificLayout();
+    AbortTryConvert(NULL, switchLayoutOnEmpty);
     return;
   }
   free(out);
@@ -781,7 +782,7 @@ static void TryConvertSelection(ConvertInputKind kind, BOOL switchLayoutOnEmpty)
   else
     SendSyntheticCtrlChord('V');
 
-  Sleep(30);
+  Sleep(CLIPBOARD_POST_PASTE_DELAY_MS);
 
   RestoreUnicodeClipboard();
 
@@ -795,8 +796,8 @@ static void TryConvertSelection(ConvertInputKind kind, BOOL switchLayoutOnEmpty)
  * @param wParam Window message.
  * @param lParam Keyboard event.
  * @return 1 if the event was handled, 0 if it was not.
+ * @note Ctrl is read with GetAsyncKeyState on keyup (not hook counters).
  */
-/// Ctrl is tested with GetAsyncKeyState on keyup (not hook counters).
 LRESULT CALLBACK HandleKeyboardEvent(int nCode, WPARAM wParam, LPARAM lParam)
 {
   KBDLLHOOKSTRUCT *key = (KBDLLHOOKSTRUCT *)lParam;
@@ -850,13 +851,9 @@ LRESULT CALLBACK HandleKeyboardEvent(int nCode, WPARAM wParam, LPARAM lParam)
             // Defer TryConvertSelection: SendInput must not run inside this callback or synthetic
             // Ctrl+C/V interleaves with the still-processing hotkey release in some hosts.
             if (ctrlDown && convertWithCtrl)
-            {
-              PostThreadMessageW(GetCurrentThreadId(), WM_SWITCHY_DEFER, (WPARAM)ConvertInput_CtrlHeld,
-                                 (LPARAM)smartCaps);
-            }
+              PostDeferConvert(ConvertInput_CtrlHeld, smartCaps);
             else if (!ctrlDown && smartCaps)
-              PostThreadMessageW(GetCurrentThreadId(), WM_SWITCHY_DEFER, (WPARAM)ConvertInput_SyntheticCtrl,
-                                 (LPARAM)TRUE);
+              PostDeferConvert(ConvertInput_SyntheticCtrl, TRUE);
             else
               SwitchToSpecificLayout();
           }
@@ -899,7 +896,11 @@ int main(void)
     return 1;
   }
 
-  LoadSettings();
+  if (!LoadSettings())
+  {
+    CloseHandle(hMutex);
+    return 1;
+  }
 
   hHook = SetWindowsHookExW(WH_KEYBOARD_LL, HandleKeyboardEvent, 0, 0);
   if (hHook == NULL)
