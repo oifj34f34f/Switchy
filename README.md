@@ -12,9 +12,12 @@ ignoring any other layouts installed on the system.
 
 ![switchy](switchy.jpg)
 
-The switching happens silently
-(using the direct `WM_INPUTLANGCHANGEREQUEST` message),
-so it does not trigger the annoying Windows 10/11 language pop-up menu.
+Layout switching targets the **focused** control when possible
+(`GetGUIThreadInfo` + `SendMessageTimeout` with `WM_INPUTLANGCHANGEREQUEST`),
+with fallbacks documented in code.
+This avoids relying only on `PostMessage` to the top-level window
+(which often fails in modal dialogs such as **Save As**).
+It still does not show the Windows 10/11 language pop-up by default.
 
 ## Usage
 
@@ -29,6 +32,18 @@ so it does not trigger the annoying Windows 10/11 language pop-up menu.
 * **Caps Lock** (default): Switch between Layout 1 and Layout 2.
 * **Shift + Caps Lock**: Toggle actual Caps Lock state (upper case mode).
 * **Alt + Caps Lock**: Enable/Disable Switchy temporarily.
+* **Ctrl + Caps Lock** (when `ConvertWithCtrl=1`):
+  Select text in the focused field, then press this chord
+  to **re-translate** the selection as if it had been typed on the other layout,
+  paste the result, and switch to that layout.
+  (Use explicit selection; there is no keystroke buffer.)
+* `SmartCaps=1`: plain **Caps Lock** runs a synthetic copy;
+  conversion runs only if the Unicode clipboard **changes**
+  after that copy (so an old clip is not mistaken for a selection).
+  Layout always switches. With **Ctrl** held,
+  the layout switches even when nothing is selected.
+  Clipboard is backed up and restored;
+  very large clips (over ~1M characters) skip conversion and only switch layout.
 
 > [!NOTE]  
 > If you changed the `SwitchKey` in the config,
@@ -73,7 +88,46 @@ Layout2=00000419
 ; 45 = Insert
 ; 112 = F1
 SwitchKey=20
+
+; 1 = Ctrl + SwitchKey converts selected text (see above). 0 = Ctrl+key does nothing special.
+ConvertWithCtrl=1
+
+; 1 = smart Caps (see above). 0 = plain Caps only toggles layout.
+SmartCaps=0
+
+; If the normal layout request fails: 0 = none, 1 = Alt+Shift cycle, 2 = Ctrl+Shift cycle,
+; 3 = Win+Space (language bar). Your Windows "switch input language" hotkey may differ.
+FallbackCycleHotkey=0
 ```
+
+### Optional: exclude processes
+
+Use **only the key** (executable file name, lower case in memory).
+Values are ignored.
+
+```ini
+[ExcludeSwitch]
+notepad.exe=
+
+[ExcludeConvert]
+SomeGame.exe=
+```
+
+`ExcludeSwitch` disables layout switching. `ExcludeConvert` disables the
+Ctrl+SwitchKey conversion. Listing an exe in **both** disables both behaviors
+for that process.
+
+### Limitations
+
+* **Conversion** covers typical letters, digits, and basic Shift/AltGr mappings
+  built from the two configured layouts. Dead keys and exotic compose sequences
+  are not promised.
+* **Clipboard**: only the Unicode text (`CF_UNICODETEXT`) is restored around
+  copy/paste; other clipboard formats may be dropped during the operation.
+* **UIPI**: synthetic input may not reach elevated or protected targets unless
+  Switchy runs with sufficient integrity.
+* **Layouts**: the two layouts are distinguished by **full** `HKL` handles,
+  so variants of the same language (e.g. US QWERTY vs Dvorak) are supported.
 
 ### How to find Keyboard Layout IDs?
 
@@ -106,5 +160,7 @@ This fork uses standard C API and does not require Visual Studio.
 You can build it using **GCC (MinGW)**.
 
 ```bash
-gcc switchy.c -o switchy.exe -mwindows -O2 -luser32 -lkernel32
+make
+# or
+gcc switchy.c charmap.c -o switchy.exe -mwindows -O2 -std=c99 -luser32 -lkernel32
 ```

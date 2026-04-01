@@ -13,6 +13,36 @@ and this project adheres to [Semantic Versioning][].
 ### Removed
 -->
 
+## Unreleased
+
+### Added
+
+* Optional Ctrl plus switch key (`ConvertWithCtrl`):
+  turn the current selection into the other configured layout,
+  replace it, and switch input to that layout.
+* Letter-by-letter conversion between the two layouts;
+  characters with no mapping are left as they are.
+* Sections `ExcludeSwitch` and `ExcludeConvert` in the config
+  to disable switching or conversion in specific apps (by executable name).
+* Optional `SmartCaps`:
+  the switch key alone can run the same conversion flow without Ctrl;
+  conversion runs only when the clipboard text actually changes after copy,
+  so a plain layout switch does not reuse an old clip;
+  oversized clipboard text only triggers a layout switch.
+* Optional `FallbackCycleHotkey`:
+  if the layout still does not apply,
+  press the system "next input language" shortcut once (configurable variant).
+
+### Changed
+
+* Switching follows the focused control
+  (including typical modal dialogs such as Save As),
+  not only the top-level window.
+* The two layouts are told apart by the full keyboard layout identity,
+  so two variants under one Windows language (for example QWERTY and Dvorak)
+  are handled correctly.
+* The configuration file and paths are read as Unicode end to end.
+
 ## [2.0.1] - 2025-12-18
 
 ### Added
