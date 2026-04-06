@@ -1,7 +1,7 @@
 CC = gcc
-CFLAGS = -O2 -mwindows
+CFLAGS = -O2 -mwindows -std=c99
 LIBS = -luser32 -lkernel32
-SRC = switchy.c
+SRC = switchy.c charmap.c
 TARGET = switchy.exe
 
 .PHONY: all build clean release-notes release
@@ -16,7 +16,7 @@ $(TARGET): $(SRC)
 	$(CC) $(SRC) -o $(TARGET) $(CFLAGS) $(LIBS)
 
 clean:
-	rm -f $(TARGET) switchy.ini switchy.zip
+	rm -f $(TARGET)
 
 release-notes:
 	@awk '\
