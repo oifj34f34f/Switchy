@@ -402,7 +402,12 @@ static BOOL SetClipboardUnicodeText(const WCHAR *s)
   }
 
   EmptyClipboard();
-  SetClipboardData(CF_UNICODETEXT, h);
+  if (!SetClipboardData(CF_UNICODETEXT, h))
+  {
+    GlobalFree(h);
+    CloseClipboard();
+    return FALSE;
+  }
   CloseClipboard();
   return TRUE;
 }
@@ -430,7 +435,8 @@ static void RestoreUnicodeClipboard(void)
       {
         memcpy(p, clipboardBackup, n);
         GlobalUnlock(h);
-        SetClipboardData(CF_UNICODETEXT, h);
+        if (!SetClipboardData(CF_UNICODETEXT, h))
+          GlobalFree(h);
       }
       else
         GlobalFree(h);
