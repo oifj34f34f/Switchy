@@ -642,10 +642,10 @@ static void SendSyntheticCtrlChord(WORD vk)
 }
 
 /**
- * @brief TRUE if clipboard after copy equals pre-copy backup (no selection often leaves clip unchanged).
+ * @brief Whether the clipboard after copy matches the pre-copy backup (no selection often leaves it unchanged).
  * @param after Text after copy.
  * @param afterLen Length in WCHARs excluding null.
- * @return TRUE if clipboard after copy equals pre-copy backup (no selection often leaves clip unchanged).
+ * @return Nonzero if @a after equals the backed-up snapshot.
  */
 static BOOL ClipboardUnchangedAfterCopy(const WCHAR *after, size_t afterLen)
 {
@@ -895,7 +895,7 @@ LRESULT CALLBACK HandleKeyboardEvent(int nCode, WPARAM wParam, LPARAM lParam)
     }
   }
 
-  return CallNextHookEx(NULL, nCode, wParam, lParam);
+  return CallNextHookEx(hHook, nCode, wParam, lParam);
 }
 
 /**
