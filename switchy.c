@@ -669,11 +669,14 @@ static void AbortTryConvert(WCHAR *optionalText, BOOL switchLayoutOnEmpty)
 
 /**
  * @brief Queues TryConvertSelection on this thread (never call SendInput from inside hook).
+ * @return TRUE if the message was posted.
  */
-static void PostDeferConvert(ConvertInputKind kind, BOOL switchOnEmpty)
+static BOOL PostDeferConvert(ConvertInputKind kind, BOOL switchOnEmpty)
 {
-  if (!PostThreadMessageW(GetCurrentThreadId(), WM_SWITCHY_DEFER, (WPARAM)kind, (LPARAM)switchOnEmpty))
-    LOG(L"PostThreadMessage WM_SWITCHY_DEFER failed\n");
+  if (PostThreadMessageW(GetCurrentThreadId(), WM_SWITCHY_DEFER, (WPARAM)kind, (LPARAM)switchOnEmpty))
+    return TRUE;
+  LOG(L"PostThreadMessage WM_SWITCHY_DEFER failed\n");
+  return FALSE;
 }
 
 /**
@@ -856,9 +859,15 @@ LRESULT CALLBACK HandleKeyboardEvent(int nCode, WPARAM wParam, LPARAM lParam)
             // Defer TryConvertSelection: SendInput must not run inside this callback or synthetic
             // Ctrl+C/V interleaves with the still-processing hotkey release in some hosts.
             if (ctrlDown && convertWithCtrl)
-              PostDeferConvert(ConvertInput_CtrlHeld, smartCaps);
+            {
+              if (!PostDeferConvert(ConvertInput_CtrlHeld, smartCaps))
+                SwitchToSpecificLayout();
+            }
             else if (!ctrlDown && smartCaps)
-              PostDeferConvert(ConvertInput_SyntheticCtrl, TRUE);
+            {
+              if (!PostDeferConvert(ConvertInput_SyntheticCtrl, TRUE))
+                SwitchToSpecificLayout();
+            }
             else
               SwitchToSpecificLayout();
           }
