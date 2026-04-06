@@ -920,6 +920,7 @@ int main(void)
   if (hHook == NULL)
   {
     ShowErrorW(L"Error calling SetWindowsHookEx");
+    CloseHandle(hMutex);
     return 1;
   }
 
