@@ -25,11 +25,11 @@
 #define WM_SWITCHY_DEFER (WM_APP + 0x100) ///< Thread message: run TryConvertSelection outside WH_KEYBOARD_LL.
 #endif
 
-#define MAX_EXCLUDE 128                  ///< Max executable basenames per ExcludeSwitch / ExcludeConvert.
-#define SENDMSG_TIMEOUT_MS 200           ///< Timeout for SendMessageTimeout layout requests (ms).
-#define CLIPBOARD_MAX_WCHARS (1024 * 1024) ///< Max WCHAR count for clipboard backup/convert (~2 MiB).
-#define CLIPBOARD_POST_COPY_DELAY_MS 40  ///< After synthetic Ctrl+C, wait for CF_UNICODETEXT.
-#define CLIPBOARD_POST_PASTE_DELAY_MS 30 ///< After paste, before restoring prior clipboard.
+#define MAX_EXCLUDE 128                     ///< Max executable basenames per ExcludeSwitch / ExcludeConvert.
+#define SENDMSG_TIMEOUT_MS 200              ///< Timeout for SendMessageTimeout layout requests (ms).
+#define CLIPBOARD_MAX_WCHARS (1024 * 1024)  ///< Max WCHAR count for clipboard backup/convert (~2 MiB).
+#define CLIPBOARD_POST_COPY_DELAY_MS 40     ///< After synthetic Ctrl+C, wait for CF_UNICODETEXT.
+#define CLIPBOARD_POST_PASTE_DELAY_MS 30    ///< After paste, before restoring prior clipboard.
 
 /**
  * @name Global configuration (set by LoadSettings)
@@ -149,7 +149,9 @@ static void LoadExcludeSection(const WCHAR *section, WCHAR **out, int *outCount)
       key[259] = 0;
     }
     LowerW(key);
-    out[(*outCount)++] = DupW(key);
+    WCHAR *copy = DupW(key);
+    if (copy)
+      out[(*outCount)++] = copy;
     p += wcslen(p) + 1;
   }
 }
