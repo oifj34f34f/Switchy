@@ -30,6 +30,7 @@
 #define CLIPBOARD_MAX_WCHARS (1024 * 1024)  ///< Max WCHAR count for clipboard backup/convert (~2 MiB).
 #define CLIPBOARD_POST_COPY_DELAY_MS 40     ///< After synthetic Ctrl+C, wait for CF_UNICODETEXT.
 #define CLIPBOARD_POST_PASTE_DELAY_MS 30    ///< After paste, before restoring prior clipboard.
+#define SYS_LAYOUTS_STACK_MAX 64            ///< Stack buffer for GetKeyboardLayoutList (avoids malloc when enough).
 
 /**
  * @name Global configuration (set by LoadSettings)
@@ -232,13 +233,33 @@ BOOL LoadSettings(void)
   LoadExcludeSection(L"ExcludeConvert", excludeConvert, &excludeConvertCount);
 
   // Snapshot system layouts once for auto-fill when Layout1/2 are empty in INI
+  HKL stackLayouts[SYS_LAYOUTS_STACK_MAX];
   HKL *sysLayouts = NULL;
-  UINT sysCount = GetKeyboardLayoutList(0, NULL);
-  if (sysCount > 0)
+  UINT sysCount = 0;
+  BOOL sysLayoutsHeap = FALSE;
+
+  UINT needLayouts = GetKeyboardLayoutList(0, NULL);
+  if (needLayouts > 0)
   {
-    sysLayouts = (HKL *)malloc(sysCount * sizeof(HKL));
-    if (sysLayouts)
-      GetKeyboardLayoutList(sysCount, sysLayouts);
+    if (needLayouts <= SYS_LAYOUTS_STACK_MAX)
+    {
+      sysCount = GetKeyboardLayoutList(needLayouts, stackLayouts);
+      sysLayouts = stackLayouts;
+    }
+    else
+    {
+      sysLayouts = (HKL *)malloc(needLayouts * sizeof(HKL));
+      if (sysLayouts)
+      {
+        sysCount = GetKeyboardLayoutList(needLayouts, sysLayouts);
+        sysLayoutsHeap = TRUE;
+      }
+      else
+      {
+        sysCount = GetKeyboardLayoutList(SYS_LAYOUTS_STACK_MAX, stackLayouts);
+        sysLayouts = stackLayouts;
+      }
+    }
   }
 
   WCHAR layoutStr1[KL_NAMELENGTH] = { 0 };
@@ -271,7 +292,7 @@ BOOL LoadSettings(void)
     LOG(L"Layout2 auto-detected: %p\n", hLayout2);
   }
 
-  if (sysLayouts)
+  if (sysLayoutsHeap)
     free(sysLayouts);
 
   if (!hLayout1 || !hLayout2)
