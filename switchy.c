@@ -414,7 +414,10 @@ static BOOL SetClipboardUnicodeText(const WCHAR *s)
 static void RestoreUnicodeClipboard(void)
 {
   if (!OpenClipboard(NULL))
+  {
+    FreeClipboardBackup();
     return;
+  }
   EmptyClipboard();
   if (clipboardBackup)
   {
