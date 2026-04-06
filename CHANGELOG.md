@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning][].
 ### Removed
 -->
 
-## Unreleased
+## [2.1.0] - 2026-04-07
 
 ### Added
 
