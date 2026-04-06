@@ -924,8 +924,15 @@ int main(void)
   }
 
   MSG messages;
-  while (GetMessageW(&messages, NULL, 0, 0))
+  BOOL gm;
+  for (;;)
   {
+    gm = GetMessageW(&messages, NULL, 0, 0);
+    if (gm == 0)
+      break; /* WM_QUIT */
+    if (gm == (BOOL)-1)
+      break; /* documented error return */
+
     if (messages.message == WM_SWITCHY_DEFER)
     {
       TryConvertSelection((ConvertInputKind)messages.wParam, (BOOL)messages.lParam);
@@ -942,5 +949,5 @@ int main(void)
   FreeExcludeList(excludeSwitch, &excludeSwitchCount);
   FreeExcludeList(excludeConvert, &excludeConvertCount);
   FreeClipboardBackup();
-  return 0;
+  return gm == (BOOL)-1 ? 1 : 0;
 }
