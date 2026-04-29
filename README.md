@@ -164,3 +164,4 @@ make
 # or
 gcc switchy.c charmap.c -o switchy.exe -mwindows -O2 -std=c99 -luser32 -lkernel32
 ```
+ 
