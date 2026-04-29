@@ -861,45 +861,38 @@ LRESULT CALLBACK HandleKeyboardEvent(int nCode, WPARAM wParam, LPARAM lParam)
 
       if (wParam == WM_KEYDOWN)
       {
-        hotkeyProcessed = TRUE;
-        if (enabled)
-        {
-          /* Shift+hotkey: later we synthesize a real key toggle (Caps LED etc.). */
-          if (shiftProcessed)
-            hotkeyOriginalActionRequired = TRUE;
-          return 1;
-        }
+          hotkeyProcessed = TRUE;
+          if (enabled)
+          {
+              if (shiftProcessed)
+              {
+                  hotkeyOriginalActionRequired = FALSE;
+                  SimulateOriginalKeyPress();
+                  return 1;
+              }
+      
+              BOOL ctrlDown = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+              if (ctrlDown && convertWithCtrl)
+              {
+                  if (!PostDeferConvert(ConvertInput_CtrlHeld, smartCaps))
+                      SwitchToSpecificLayout();
+              }
+              else if (!ctrlDown && smartCaps)
+              {
+                  if (!PostDeferConvert(ConvertInput_SyntheticCtrl, TRUE))
+                      SwitchToSpecificLayout();
+              }
+              else
+                  SwitchToSpecificLayout();
+      
+              return 1;
+          }
       }
       else if (wParam == WM_KEYUP)
       {
-        hotkeyProcessed = FALSE;
-        if (enabled)
-        {
-          if (shiftProcessed || hotkeyOriginalActionRequired)
-          {
-            SimulateOriginalKeyPress();
-            hotkeyOriginalActionRequired = FALSE;
-          }
-          else
-          {
-            BOOL ctrlDown = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
-            // Defer TryConvertSelection: SendInput must not run inside this callback or synthetic
-            // Ctrl+C/V interleaves with the still-processing hotkey release in some hosts.
-            if (ctrlDown && convertWithCtrl)
-            {
-              if (!PostDeferConvert(ConvertInput_CtrlHeld, smartCaps))
-                SwitchToSpecificLayout();
-            }
-            else if (!ctrlDown && smartCaps)
-            {
-              if (!PostDeferConvert(ConvertInput_SyntheticCtrl, TRUE))
-                SwitchToSpecificLayout();
-            }
-            else
-              SwitchToSpecificLayout();
-          }
-          return 1;
-        }
+          hotkeyProcessed = FALSE;
+          if (enabled)
+              return 1;
       }
     }
 
