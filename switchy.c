@@ -46,9 +46,7 @@ HHOOK hHook; ///< Low-level keyboard hook instance.
 BOOL enabled = TRUE; ///< Master enable; Alt+hotkey toggles enabled state.
 
 BOOL appSwitchRequired = FALSE; ///< Alt went down while hotkey active: next Alt keyup toggles enabled.
-BOOL hotkeyOriginalActionRequired = FALSE; ///< Shift+hotkey: later inject real key press (e.g. Caps LED).
 BOOL hotkeyProcessed = FALSE; ///< Hotkey currently held (Alt/Shift context).
-BOOL shiftProcessed = FALSE; ///< Shift held (passthrough Caps).
 
 BOOL convertWithCtrl = TRUE; ///< INI: Ctrl+switch runs conversion when TRUE.
 BOOL smartCaps = FALSE; ///< INI: plain switch may run synthetic Ctrl+C conversion.
@@ -841,9 +839,11 @@ LRESULT CALLBACK HandleKeyboardEvent(int nCode, WPARAM wParam, LPARAM lParam)
   {
     if (key->vkCode == hotkeyVkCode)
     {
-      /* Alt+hotkey uses WM_SYSKEY* so we can tell Alt apart from plain hotkey. */
+      /* Alt+hotkey uses WM_SYSKEYDOWN so we can tell Alt apart from plain hotkey. */
       if (wParam == WM_SYSKEYDOWN)
       {
+        if (hotkeyProcessed) return 1; // Защита от автоповтора при зажатии Alt+Caps
+
         appSwitchRequired = TRUE;
         hotkeyProcessed = TRUE;
         return 1;
@@ -859,40 +859,52 @@ LRESULT CALLBACK HandleKeyboardEvent(int nCode, WPARAM wParam, LPARAM lParam)
         return 1;
       }
 
+      // Основная обработка: событие Key Down
       if (wParam == WM_KEYDOWN)
       {
+          // ЗАЩИТА ОТ АВТОПОВТОРА: если кнопка уже зажата, игнорируем спам нажатий
+          if (hotkeyProcessed)
+              return 1;
+
           hotkeyProcessed = TRUE;
+
           if (enabled)
           {
-              if (shiftProcessed)
+              BOOL shiftDown = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+              BOOL ctrlDown = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+
+              // 1. Нажатие Shift + Caps -> Настоящий Caps Lock
+              if (shiftDown)
               {
-                  hotkeyOriginalActionRequired = FALSE;
                   SimulateOriginalKeyPress();
                   return 1;
               }
       
-              BOOL ctrlDown = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+              // 2. Нажатие Ctrl + Caps -> Конвертация выделенного текста (опционально)
               if (ctrlDown && convertWithCtrl)
               {
                   if (!PostDeferConvert(ConvertInput_CtrlHeld, smartCaps))
                       SwitchToSpecificLayout();
               }
+              // 3. Простое нажатие Caps Lock -> Переключение раскладки (и SmartCaps, если вкл)
               else if (!ctrlDown && smartCaps)
               {
                   if (!PostDeferConvert(ConvertInput_SyntheticCtrl, TRUE))
                       SwitchToSpecificLayout();
               }
               else
+              {
                   SwitchToSpecificLayout();
+              }
       
               return 1;
           }
       }
       else if (wParam == WM_KEYUP)
       {
-          hotkeyProcessed = FALSE;
+          hotkeyProcessed = FALSE; // Сбрасываем флаг, когда клавиша физически отпущена
           if (enabled)
-              return 1;
+              return 1; // Блокируем KeyUp, чтобы система не реагировала на кнопку
       }
     }
 
@@ -900,18 +912,6 @@ LRESULT CALLBACK HandleKeyboardEvent(int nCode, WPARAM wParam, LPARAM lParam)
     {
       if (wParam == WM_SYSKEYDOWN && hotkeyProcessed)
         appSwitchRequired = TRUE;
-    }
-
-    else if (key->vkCode == VK_LSHIFT || key->vkCode == VK_RSHIFT)
-    {
-      if (wParam == WM_KEYDOWN)
-      {
-        shiftProcessed = TRUE;
-        if (hotkeyProcessed)
-          hotkeyOriginalActionRequired = TRUE;
-      }
-      else if (wParam == WM_KEYUP)
-        shiftProcessed = FALSE;
     }
   }
 
